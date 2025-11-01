@@ -1,0 +1,12 @@
+openai-whisper
+torch
+torchaudio
+numpy
+scipy
+ffmpeg-python
+flask
+flask-cors
+requests
+sentence-transformers
+transformers
+scikit-learn
