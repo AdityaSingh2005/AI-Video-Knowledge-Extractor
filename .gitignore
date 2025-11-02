@@ -136,3 +136,15 @@ temp/
 .env.development.local
 .env.test.local
 .env.production.local
+
+# Python Whisper cache and models
+python-whisper/hf_cache/
+python-whisper/whisper_env/
+*.safetensors
+*.bin
+*.onnx
+
+# Large model files
+*.model
+*.pt
+*.pth
