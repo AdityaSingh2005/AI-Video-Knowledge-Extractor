@@ -8,6 +8,7 @@ import * as FormData from 'form-data';
 import * as http from 'http';
 
 import { TranscriptionSegment } from '../transcription.service';
+import { AzureBlobService } from '../../video/services/azure-blob.service';
 
 @Injectable()
 export class WhisperService {
@@ -15,7 +16,10 @@ export class WhisperService {
   private openai: OpenAI;
   private whisperMode: string;
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+    private azureBlobService: AzureBlobService,
+  ) {
     this.whisperMode = this.configService.get('WHISPER_MODE', 'openai');
     
     if (this.whisperMode === 'openai') {
@@ -152,22 +156,49 @@ export class WhisperService {
         return segments;
       }
       
-      // Handle HTTP URLs (original logic)
-      const response = await fetch(`${localWhisperUrl}/transcribe`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          audio_url: audioUrl,
-        }),
+      // Handle HTTP URLs - download the file and send it as form data
+      this.logger.log('Downloading audio file for local Whisper server');
+      const audioBuffer = await this.downloadAudioFile(audioUrl);
+      
+      const formData = new FormData();
+      formData.append('audio_file', audioBuffer, {
+        filename: 'audio.mp3',
+        contentType: 'audio/mpeg',
       });
-
-      if (!response.ok) {
-        throw new Error(`Local Whisper server responded with status: ${response.status}`);
-      }
-
-      const result = await response.json();
+      
+      // Use a Promise-based approach with http module for file upload
+      const result = await new Promise<any>((resolve, reject) => {
+        const url = new URL(`${localWhisperUrl}/transcribe`);
+        
+        const req = http.request({
+          hostname: url.hostname,
+          port: url.port,
+          path: url.pathname,
+          method: 'POST',
+          headers: formData.getHeaders(),
+        }, (res) => {
+          let data = '';
+          res.on('data', (chunk) => data += chunk);
+          res.on('end', () => {
+            try {
+              const jsonResult = JSON.parse(data);
+              if (res.statusCode !== 200) {
+                reject(new Error(`Local Whisper server responded with status: ${res.statusCode}`));
+              } else {
+                resolve(jsonResult);
+              }
+            } catch (error) {
+              reject(new Error(`Failed to parse response: ${error.message}`));
+            }
+          });
+        });
+        
+        req.on('error', (error) => {
+          reject(new Error(`Request failed: ${error.message}`));
+        });
+        
+        formData.pipe(req);
+      });
       
       if (!result.success) {
         throw new Error(`Local Whisper transcription failed: ${result.error}`);
@@ -202,7 +233,14 @@ export class WhisperService {
 
   private async downloadAudioFile(url: string): Promise<Buffer> {
     try {
-      // If it's an Azure Blob URL, we can fetch it directly
+      // Check if it's an Azure Blob URL and use Azure SDK for secure download
+      if (url.includes('blob.core.windows.net')) {
+        this.logger.log('Downloading audio file from Azure Blob Storage using SDK');
+        return await this.azureBlobService.downloadFile(url);
+      }
+      
+      // For other URLs, use direct fetch
+      this.logger.log('Downloading audio file via direct fetch');
       const response = await fetch(url);
       
       if (!response.ok) {
